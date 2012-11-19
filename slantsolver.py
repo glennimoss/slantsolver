@@ -1,30 +1,73 @@
 #!/usr/bin/python3
 
-import sys, pprint, time
-from collections import deque
+import sys, pprint, time, collections, os, re, argparse
 
 _base = ord('a') - 1
 expand = lambda c: ord(c) - _base
+waittime = 0.25
+#waittime = 1
+
+def save_field (s):
+  s = str(s)
+  return '{}:{}'.format(len(s), s)
+
+def invert (state):
+  if state:
+    return '╱' if state == '╲' else '╲'
+  return None
+
+def connect_edge (n):
+  return '╲' if n%3==0 else '╱'
+
+def anti_edge (n):
+  return invert(connect_edge(n))
 
 def hl_current (txt):
   return '\033[7;2;32m' + txt + '\033[0m'
 
 def hl_changed (txt):
-  return '\033[1;31m' + txt + '\033[0m'
+  return '\033[7;1;30;43m' + txt + '\033[0m'
 
-def hl_cycle (txt):
-  return '\033[33m' + txt + '\033[0m'
+def hl_error (txt):
+  return '\033[7;1;30;41m' + txt + '\033[0m'
 
+def listify (l):
+  if type(l) is not list:
+    return [l]
+  return l
+
+def which_edges (dx, dy):
+  e1 = (dx>0) + (dy>0)*2
+  e2 = e1 + 1 + abs(dx)
+  return e1, e2
 
 class Puzzle:
+  checking = set()
 
   def __init__ (self, game_id):
     self.sl = EdgeNode(self, None, None, '╱')
     self.bs = EdgeNode(self, None, None, '╲')
 
-    size, game = game_id.split(':')
-    self.width, self.height = (int(v) for v in size.split('x'))
+    moves = []
+    if re.match(r'\d+x\d+:\w+', game_id):
+      size, self.game = game_id.split(':')
+    else:
+      with open(game_id, 'r') as i:
+        for line in i:
+          if not line.strip():
+            continue
+          param, _, val = (p.strip() for p in line.split(':', 2))
+          if param == 'PARAMS':
+            size = val
+          elif param == 'DESC':
+            self.game = val
+          elif param == 'MOVE':
+            s = '╱' if val[0] == '/' else '╲'
+            x, y = val[1:].split(',')
+            moves.append((int(x), int(y), s))
 
+
+    self.width, self.height = (int(v) for v in size.split('x'))
     self.edge = [[EdgeNode(self, x, y) for x in range(0, self.width)]
                  for y in range(0, self.height)]
     self.vertex = [[VertexNode(self, x, y) for x in range(0, self.width+1)]
@@ -51,7 +94,7 @@ class Puzzle:
           self.edge[y][x].vertex = verticies
 
     pos_x = pos_y = 0
-    for c in game:
+    for c in self.game:
       if c.isalpha():
         pos_x += expand(c)
       else:
@@ -63,20 +106,38 @@ class Puzzle:
         pos_y += 1
         pos_x -= self.width + 1
 
-    self.unsolved_nodes = deque()
+    self.moves = []
+    for x, y, s in moves:
+      self.edge[y][x].state = s
+
+    self.unsolved_nodes = collections.deque()
     for y in range(0, self.height+1):
       for x in range(0, self.width+1):
         if not self.vertex[y][x].solved:
           self.unsolved_nodes.append(self.vertex[y][x])
-        if y < self.height and x < self.width:
+        if y < self.height and x < self.width and not self.edge[y][x].solved:
           self.unsolved_nodes.append(self.edge[y][x])
 
-  def draw (self, node=None, changes=[], cycle=None):
-    if node:
-      time.sleep(1)
-    out = [
-      # Reposition to overwrite
-      '\033[{}F'.format(self.height*2 + 2) if node else '']
+  @property
+  def game_id (self):
+    return '{}x{}:{}'.format(self.width, self.height, self.game)
+
+  def move (self, edge):
+    self.moves.append(edge)
+
+  def undo (self, mark=None):
+    if mark is None:
+      mark = len(self.moves) - 1
+    while len(self.moves) > mark:
+      self.moves.pop().state = None
+
+  def undo_mark (self):
+    return len(self.moves)
+
+  def draw (self, changes=[], errors=[]):
+    changes = listify(changes)
+    errors = listify(errors)
+    out = []
 
     for y in range(0, self.height*2 + 1):
       puzzlerow = y%2 == 0
@@ -84,22 +145,26 @@ class Puzzle:
       if puzzlerow:
         row = []
         for x in range(0, self.width+1):
-          txt = str(self.vertex[y][x])
-          if self.vertex[y][x] is node:
+          v = self.vertex[y][x]
+          txt = str(v)
+          if v in self.checking:
             txt = hl_current(txt)
-          elif self.vertex[y][x] is cycle:
-            txt = hl_cycle(txt)
-          elif self.vertex[y][x] in changes:
+          if v in errors:
+            txt = hl_error(txt)
+          if v in changes:
             txt = hl_changed(txt)
           row.append(txt)
         out.append('─'.join(row))
       else:
         row = []
         for x in range(0, self.width):
-          txt = str(self.edge[y][x])
-          if self.edge[y][x] is node:
+          e = self.edge[y][x]
+          txt = str(e)
+          if e in self.checking:
             txt = hl_current(txt)
-          elif self.edge[y][x] in changes:
+          if e in errors:
+            txt = hl_error(txt)
+          if e in changes:
             txt = hl_changed(txt)
           row.append(txt)
         out.append('│' + '│'.join(row) + '│')
@@ -108,29 +173,72 @@ class Puzzle:
   def __str__ (self):
     return self.draw()
 
+  def print (self, *vargs, **kwargs):
+    if args.q:
+      return
+    if vargs or kwargs:
+      # Reposition to overwrite
+      print('\033[{}F'.format(self.height*2 + 2))
+    wait = kwargs.pop('wait', waittime)
+    print('\033[?25l' + self.draw(*vargs, **kwargs) + '\033[?25h')
+    time.sleep(wait)
+
   def solve (self):
     j = 0
+    open_slant = False
     while self.unsolved_nodes:
       try:
         node = self.unsolved_nodes.popleft()
         if node.solved:
           j = 0
         else:
-          changes = node.solve()
-
-          if not node.solved:
+          if not node.solve():
             self.unsolved_nodes.append(node)
-
-          if changes:
-            j = 0
-          else:
             j += 1
-            if j == len(self.unsolved_nodes):
+            if j == len(self.unsolved_nodes)*2:
               break
+          else:
+            j = 0
       except KeyboardInterrupt:
         break
-    print(self.draw(1))
+      except AssertionError as e:
+        print("hello world")
+        break
+    else:
+      open_slant = True
 
+    self.print(wait=0)
+    if self.unsolved_nodes:
+      print('Failure...')
+    else:
+      print('Success!')
+
+    size = save_field('{}x{}'.format(self.width, self.height))
+    moves = []
+    for e in self.moves:
+      moves.append(save_field(
+        '{}{},{}'.format('/' if e.state == '╱' else '\\', e.x, e.y)))
+    states = save_field(len(moves) + 1)
+
+    with open('soln.game', 'w') as o:
+      print("SAVEFILE:41:Simon Tatham's Portable Puzzle Collection\n"
+            'VERSION :1:1\n'
+            'GAME    :5:Slant\n'
+            'PARAMS  :' + size + '\n'
+            'CPARAMS :' + size + '\n'
+            'DESC    :' + save_field(self.game) + '\n'
+            'NSTATES :' + states + '\n'
+            'STATEPOS:' + ('1:1' if args.q else states),
+            file=o)
+      for m in moves:
+        print('MOVE    :' + m, file=o)
+
+    if open_slant:
+      os.system('slant soln.game')
+
+
+  def notify_change (self, edge):
+    pass
 
 class Node:
   def __init__ (self, puzzle, x, y):
@@ -138,12 +246,27 @@ class Node:
     self.x = x
     self.y = y
 
-  def solve (self):
-    return []
-
   @property
   def solved (self):
     return False
+
+  def solve (self):
+    self.puzzle.checking = set()
+    to_solve = collections.OrderedDict()
+    to_solve[self] = None
+
+    while to_solve:
+      node, _ = to_solve.popitem()
+      self.puzzle.checking.add(node)
+      #self.puzzle.print(wait=0.05)
+      affected = node._solve()
+      if affected:
+        to_solve.update((n, None) for n in affected)
+
+    self.puzzle.checking = set()
+    return self.solved
+
+
 
 class EdgeNode (Node):
   """
@@ -158,7 +281,7 @@ class EdgeNode (Node):
 
   def __init__ (self, puzzle, x, y, state=None):
     super().__init__(puzzle, x, y)
-    self.state = state
+    self._state = state
 
   def __str__ (self):
     return str(self.state) if self.state else ' '
@@ -168,38 +291,62 @@ class EdgeNode (Node):
                                               self.y, self.state)
 
   @property
+  def state (self):
+    return self._state
+
+  @state.setter
+  def state (self, value):
+    self._state = value
+    if value:
+      self.puzzle.move(self)
+
+      # Run through verticies to check assertions
+      for v in self.vertex:
+        v.solved
+
+      self._cycle_check()
+      #self.puzzle.notify_change(self)
+
+  @property
   def solved (self):
     return self.state is not None
 
-  def solve (self):
-    changed = []
-    while not self.solved:
-      newlychanged = []
+  def _cycle_check (self):
+    if self._state == '╱':
+      vert_a = self.vertex[1]
+      vert_b = self.vertex[2]
+    else:
+      vert_a = self.vertex[0]
+      vert_b = self.vertex[3]
 
-      if self.vertex[0].degree > 0 and self.vertex[3].degree > 0:
-        #import pdb;pdb.set_trace()
-        print(self.puzzle.draw(self))
-        if self.vertex[0].find_cycle(self.vertex[3]):
-          self.state = '╱'
-          newlychanged.append(self)
-      elif self.vertex[1].degree > 0 and self.vertex[2].degree > 0:
-        #import pdb;pdb.set_trace()
-        print(self.puzzle.draw(self))
-        if self.vertex[1].find_cycle(self.vertex[2]):
-          self.state = '╲'
-          newlychanged.append(self)
-      if newlychanged:
-        print(self.puzzle.draw(self, newlychanged))
+    if vert_a.degree > 1 and vert_b.degree > 1:
+      cycle = vert_a.find_cycle()
+      if cycle:
+        self.puzzle.print(errors=cycle, wait=waittime*1.5*3)
+      assert not cycle
+    return False
 
-      for n,v in enumerate(self.vertex):
-        if not v.solved:
-          newlychanged.extend(v.solve())
-
-      if not newlychanged:
-        break
-      changed.extend(newlychanged)
-
-    return changed
+  _last_moves = None
+  def _solve (self):
+    if not self.solved:
+      expanded_strategy = self._last_moves == self.puzzle.moves
+      self._last_moves = list(self.puzzle.moves)
+      try:
+        for s in ('╱', '╲'):
+          mark = self.puzzle.undo_mark();
+          self.state = s
+          if expanded_strategy:
+            for v in self.vertex:
+              if not v.solved:
+                v.solve()
+          self.puzzle.undo(mark)
+      except AssertionError:
+        s = invert(self.state)
+        self.puzzle.undo(mark)
+        self._state = s
+        self.puzzle.move(self)
+        return (v for v in self.vertex if not v.solved)
+    return False
 
   def traverse (self, vertex):
     if not self.solved:
@@ -210,13 +357,12 @@ class EdgeNode (Node):
         return self.vertex[3]
       elif vertex is self.vertex[3]:
         return self.vertex[0]
-      return None
     else:
       if vertex is self.vertex[1]:
         return self.vertex[2]
       elif vertex is self.vertex[2]:
         return self.vertex[1]
-      return None
+    return None
 
 class VertexNode (Node):
   """
@@ -251,7 +397,7 @@ class VertexNode (Node):
 
   @property
   def unsolved_edges (self):
-    return ((n%3==0,e) for n,e in enumerate(self.edge) if not e.solved)
+    return ((n,e) for n,e in enumerate(self.edge) if not e.solved)
 
   @property
   def connected_edges (self):
@@ -273,153 +419,177 @@ class VertexNode (Node):
   def solved (self):
     if self._degree is None:
       return True
+
+    if self.degree > self._degree or self.antidegree > self._antidegree:
+      self.puzzle.print(errors=self, wait=waittime*1.5*3)
+    assert self.degree <= self._degree and self.antidegree <= self._antidegree
     return self.degree + self.antidegree == 4
 
-  def solve (self):
-    changes = []
 
-    printed = False
-    if self.degree == self._degree:
-      # set all unset nodes to the antistate
-      for n, e in self.unsolved_edges:
-        if not printed:
-          print(self.puzzle.draw(self))
-          printed = True
-        e.state = '╱' if n else '╲'
-        changes.append(e)
-    elif self.antidegree == self._antidegree:
-      # set all unset nodes to the connected state
-      for n, e in self.unsolved_edges:
-        if not printed:
-          print(self.puzzle.draw(self))
-          printed = True
-        e.state = '╲' if n else '╱'
-        changes.append(e)
+  def _is_parallel (self, dx, dy, degree=None):
+    e1, e2 = (self.edge[e] for e in which_edges(dx, dy))
+    return (e1.solved and e2.solved and
+            ((self._degree in (1, 3) and e1.state != e2.state) or
+             (self._degree == 2 and e1.state == e2.state)))
 
-    if changes:
-      print(self.puzzle.draw(self, changes))
-    return changes
+  def _parallel (self, dx, dy):
+    changed = []
+    e1, e2 = which_edges(dx, dy)
+    if self._degree in (1, 3):
+      if self._degree == 1:
+        slash = anti_edge
+      else:
+        slash = connect_edge
+      for e in (e1, e2):
+        edge = self.edge[e]
+        if not edge.solved:
+          edge.state = slash(e)
+          changed.append(edge)
+    elif self._degree == 2:
+      if sum(self.edge[e].solved for e in (e1, e2)) == 1:
+        if self.edge[e1].solved:
+          self.edge[e2].state = self.edge[e1].state
+          changed.append(self.edge[e2])
+        else:
+          self.edge[e1].state = self.edge[e2].state
+          changed.append(self.edge[e1])
 
-  def find_cycle (self, vertex, source_edge=None):
-    if self is vertex:
-      return True
-    for e in self.connected_edges:
-      if e is not source_edge:
-        return e.traverse(self).find_cycle(vertex, e)
+      try:
+        changed.extend(self.adjacent_vertex(dx, dy)._parallel(dx, dy))
+      except IndexError:
+        pass
+
+    return changed
+
+  def _solve (self):
+    if not self.solved:
+      changes = []
+      if self.degree == self._degree:
+        # set all unset nodes to the antistate
+        for n, e in self.unsolved_edges:
+          e.state = anti_edge(n)
+          changes.append(e)
+      elif self.antidegree == self._antidegree:
+        # set all unset nodes to the connected state
+        for n, e in self.unsolved_edges:
+          e.state = connect_edge(n)
+          changes.append(e)
+      else:
+        for dy in (-1,0,1):
+          for dx in (-1,0,1):
+            if ((dx == dy == 0) or
+                (self.x in (0, self.puzzle.width) and dx == 0) or
+                (self.y in (0, self.puzzle.height) and dy == 0)):
+              continue
+            try:
+              ov = self.adjacent_vertex(dx, dy)
+
+              if dx != 0 and dy != 0:
+                if (0 < ov.x < self.puzzle.width and
+                    0 < ov.y < self.puzzle.height and
+                    0 < self.x < self.puzzle.width and
+                    0 < self.y < self.puzzle.height and
+                    self._degree == ov._degree == 1):
+                  self.puzzle.checking.add(ov)
+                  e, _ = which_edges(dx, dy)
+                  edge = self.edge[e]
+                  if not edge.solved:
+                    edge.state = anti_edge(e)
+                    changes.append(edge)
+              elif self._is_parallel(dx*-1, dy*-1):
+                changes.extend(ov._parallel(dx, dy))
+                continue
+              else:
+                e1, e2 = (self.edge[e] for e in which_edges(dx*-1, dy*-1))
+
+                def parallel_self ():
+                  changes.extend(self._parallel(dx*-1, dy*-1))
+                def parallel_both ():
+                  changes.extend(ov._parallel(dx, dy))
+                  parallel_self()
+                twos = []
+                def interesting_node (v):
+                  if v._is_parallel(dx, dy):
+                    return parallel_self
+                  if (self._degree in (1,3) and
+                      (v._degree == self._degree or
+                       (v._degree == 2 and
+                        ((self._degree == 1 and
+                          any(v.edge[e].state == connect_edge(e)
+                              for e in which_edges(dx, dy))) or
+                         (self._degree == 3 and
+                          any(v.edge[e].state == anti_edge(e)
+                              for e in which_edges(dx, dy)))
+                        )))):
+                    return parallel_both
+                  elif self._degree == 2 and v._degree == 2:
+                    ve1, ve2 = (v.edge[e] for e in which_edges(dx, dy))
+                    if (e1.solved ^ e2.solved and
+                        ((e1.state == ve2.state and e2.state == ve1.state) or
+                         (e1.state == invert(ve1.state) and
+                          e2.state == invert(ve2.state)))):
+                      return parallel_both
+                  return None
+
+                while ov._degree == 2 and not interesting_node(ov):
+                  twos.append(ov)
+                  ov = ov.adjacent_vertex(dx, dy)
+
+                act = interesting_node(ov)
+                if act:
+                  self.puzzle.checking.update(twos)
+                  self.puzzle.checking.add(ov)
+                  act()
+
+            except IndexError as e:
+              if dx != 0 and dy != 0:
+                continue
+              if self._degree == 1:
+                dx *= -1
+                dy *= -1
+                changes.extend(
+                  self.puzzle.vertex[self.y+dy][self.x+dx]._parallel(dx, dy))
+
+
+      if changes:
+        self.puzzle.print(changes=changes)
+        return (v for e in changes for v in e.vertex if not v.solved)
     return False
 
+  def find_cycle (self, vertex=None, visited=None):
+    if self is vertex:
+      return []
+    if vertex is None:
+      vertex = self
+      visited = set()
+    for e in self.connected_edges:
+      if e not in visited:
+        visited.add(e)
+        cycle = e.traverse(self).find_cycle(vertex, visited)
+        if cycle is not False:
+          cycle.append(e)
+          return cycle
+    return False
+
+  def adjacent_vertex (self, dx, dy):
+    x = self.x + dx
+    y = self.y + dy
+    if 0 <= x <= self.puzzle.width and 0 <= y <= self.puzzle.height:
+      return self.puzzle.vertex[y][x]
+    raise IndexError()
 
 
+ap = argparse.ArgumentParser(description='Solve Slant Puzzles')
+ap.add_argument('game', help='Game ID or saved game filename')
+ap.add_argument('-q', action='store_true', help='Suppress output')
+args = ap.parse_args()
 
 
-if len(sys.argv) > 1:
-  print(sys.argv[1])
-  p = Puzzle(sys.argv[1])
-  print(p)
+if args.game:
+  p = Puzzle(args.game)
+  print(p.game_id)
+  p.print()
   p.solve()
+#else:
+  #print('Usage:', sys.argv[0], '[game_id]')
 
-  """
-  for y in range(0,p.height+1):
-    for x in range(0,p.width+1):
-      print(p.draw(x,y))
-      if x < p.width and y < p.height:
-        print(p.draw(x,y, False))
-  """
-else:
-  print('Usage:', sys.argv[0], '[game_id]')
-
-
-
-
-
-"""
-40x40:
-g1a1g1e11j11b1a12a1a2222b121a2b1a1a2b23a13a2a31a2a1c22122a2a3a132a31221231a2122a
-2a13222b231a21a122b2d22a2b2a1c12231a1a12a2a3a1c221a1a3a122a122e2a1a2c21a221d1d1a
-321b12b1c33a1a23e231d1c211a2a12d1b21b32a3b2a121f31a121a22a1a22g132e131a1b3b123b3
-c2a3b2232a13a122a32d22b2a12b1c2a2a3a3b131a3f1a2a11a11b22213b1c212c3d13b33b31a22a21c2a2b122b3a1e1b2b2a2a32c1e2b22a2b3c1b33a2a3a32d1a13a3d2a2123b2b1b3b3c2b322a1a12a1b13213b2a2a12b1e2a1a2d113d12f2a3b21a221a1b23a2a2a31b2b12c2122a31a2c1c1c1b112b1a222a22212a12c22c32a2231a213a1c1212a1a13a1b2d21b1b3a22a3b131a123c221a1b22132e312c2a3a3a21b1a1a12a131a22a2d133e3b3f22a2c122a2a2b12b22c3a1a21a233a1c3b2a2b1b2a2a1a3222a22a11a221a1c2a23c3a21d21b11d233a13e223f1a2a1a3b12a21c11b3b2a1a232a1a1c213212b21b2a2a13c3a3a33b3311a1221a3c2222c2b2a213a223a2a2b31a2b22b23a3b11a2a2221b31b33b132a3e1b3b22a33b3122a2c3c22c2f1b2a1b1312b3a2c3b1b11d3b13b32b3d22c2d123b21a2a1e32a13223b12b3e33d13232b113a22b3c1a2a2a13a1b22a1b12b1e13b23a2b1a12312a1b32a121a21a2c3a2a3b231d233a32b2b1a1e13a1b331131d1c1e3a1c33b32c312a32c3b3e1a13213a2b1d322a12b22a2a312c1b3a2a2b1b22a11b2b231c1a23b32b31b12b2221b21b2b1a2131b23c1a1b33c1a3b2a1c1c332d1b1a13g11b1111a12a12a3b132d23a1a121b21a3211b22a1b2a231223a1b13a21221c22b13c2a3b0a11b1a1e1c1e1a1a11d11a111b
-
-
-
-+-+-+-+-+-+-+-1-+-1-+-+-+-+-+-+-+-1-+-+-+-+-+-1-1-+-+-+-+-+-+-+-+-+-+-1-1-+-+-1-+
-| | |╱|\| | | | | | |╱| | |\| | | | | |╱|\|╱|\| | | | | | | | | | | |\| | |╱|\| |
-1-2-+-1-+-2-2-2-2-+-+-1-2-1-+-2-+-+-1-+-1-+-2-+-+-2-3-+-1-3-+-2-+-3-1-+-2-+-1-+-+
-| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |
-+-2-2-1-2-2-+-2-+-3-+-1-3-2-+-3-1-2-2-1-2-3-1-+-2-1-2-2-+-2-+-1-3-2-2-2-+-+-2-3-1
-| | | | | | |\| | | |\| | | | | | | | | | | | | | | | | | | |\| | | | | | | | | |
-+-2-1-+-1-2-2-+-+-2-+-+-+-+-2-2-+-2-+-+-2-+-1-+-+-+-1-2-2-3-1-+-1-+-1-2-+-2-+-3-+
-| | |╱| | | | | | | | | | | | | | | | | | |\|╱|╱|\| | | | | | | | |\| | | | | | |
-1-+-+-+-2-2-1-+-1-+-3-+-1-2-2-+-1-2-2-+-+-+-+-+-2-+-1-+-2-+-+-+-2-1-+-2-2-1-+-+-+
-| |\|\|\| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |╱|╱|╱|
-+-1-+-+-+-+-1-+-3-2-1-+-+-1-2-+-+-1-+-+-+-3-3-+-1-+-2-3-+-+-+-+-+-2-3-1-+-+-+-+-1
-| | |╱| | |\|╱| | | | | | | | | | | | |\| | | |\| |\| | | |╱| | |\| | | | | | | |
-+-+-+-2-1-1-+-2-+-1-2-+-+-+-+-1-+-+-2-1-+-+-3-2-+-3-+-+-2-+-1-2-1-+-+-+-+-+-+-3-1
-|╱| | | | | | |╱|\| | | | | | | | | | | | | | | | | |╱| | |\| | |╱| | | |╱| | | |
-+-1-2-1-+-2-2-+-1-+-2-2-+-+-+-+-+-+-+-1-3-2-+-+-+-+-+-1-3-1-+-1-+-+-3-+-+-1-2-3-+
-| | | |╱| | | | |╱| | | | | |╱| |\|╱| | | | | | | | |\| | | | | | | | | |\| | | |
-+-3-+-+-+-2-+-3-+-+-2-2-3-2-+-1-3-+-1-2-2-+-3-2-+-+-+-+-2-2-+-+-2-+-1-2-+-+-1-+-+
-| | |╱|\| | | | | | | | | | | | | |\| | |╱| | | |╱| |\| | | | | | | | | | |\|╱| |
-+-2-+-2-+-3-+-3-+-+-1-3-1-+-3-+-+-+-+-+-+-1-+-2-+-1-1-+-1-1-+-+-2-2-2-1-3-+-+-1-+
-| |╱| | | | | | | |\| | |╱| | | | | | | | | | | | | |╱| | |╱| | | | | | | | | | |
-+-+-2-1-2-+-+-+-3-+-+-+-+-1-3-+-+-3-3-+-+-3-1-+-2-2-+-2-1-+-+-+-2-+-2-+-+-1-2-2-+
-| |\| | |╱| | | | | | | | | | | | | | | |\| | | | | | | |╱| | | | | | | | | | | |
-+-3-+-1-+-+-+-+-+-1-+-+-2-+-+-2-+-2-+-3-2-+-+-+-1-+-+-+-+-+-2-+-+-2-2-+-2-+-+-3-+
-| | |\|╱| | | | | | | | | | | | | |╱| | | | | | | | | | | | | | | | | | | | | | |
-+-+-1-+-+-3-3-+-2-+-3-+-3-2-+-+-+-+-1-+-1-3-+-3-+-+-+-+-2-+-2-1-2-3-+-+-2-+-+-1-+
-| | | |╱| | | | | | | | | | | | |╱| | | | | | | | | | | | | | | | | | | | | |\| |
-+-3-+-+-3-+-+-+-2-+-+-3-2-2-+-1-+-1-2-+-1-+-+-1-3-2-1-3-+-+-2-+-2-+-1-2-+-+-1-+-+
-| | |╱| | |\|╱|\| | | | | | | | |\| |╱| | | | | | | | | | | | | | |\| | | |\|╱| |
-+-+-+-2-+-1-+-2-+-+-+-+-1-1-3-+-+-+-+-1-2-+-+-+-+-+-+-2-+-3-+-+-2-1-+-2-2-1-+-1-+
-| | |\| |\|╱| | | |\| | | | | | | | |\| | | | |\| | | | | | | | | | | | | | | | |
-+-2-3-+-2-+-2-+-3-1-+-+-2-+-+-1-2-+-+-+-2-1-2-2-+-3-1-+-2-+-+-+-1-+-+-+-1-+-+-+-1
-| | | | | | |╱|\| | | | | | | | | | |╱| | | | |╱| | | | | | | | | | | |\| | | | |
-+-+-1-1-2-+-+-1-+-2-2-2-+-2-2-2-1-2-+-1-2-+-+-+-2-2-+-+-+-3-2-+-2-2-3-1-+-2-1-3-+
-| |\| | | | | | | | | | | | | | | | |\| |╱| | | | | | | | | | | | | | | | | | | |
-1-+-+-+-1-2-1-2-+-1-+-1-3-+-1-+-+-2-+-+-+-+-2-1-+-+-1-+-+-3-+-2-2-+-3-+-+-1-3-1-+
-| | | |\| | | | |\|╱|\| | | | | | | | | | | | | | | | | | | | | | | | | |\| | | |
-1-2-3-+-+-+-2-2-1-+-1-+-+-2-2-1-3-2-+-+-+-+-+-3-1-2-+-+-+-2-+-3-+-3-+-2-1-+-+-1-+
-| | | |\| | | | | | | | |\| | | | | | | | | | | | | | | | | | | | | | | | | |\|╱|
-1-+-1-2-+-1-3-1-+-2-2-+-2-+-+-+-+-1-3-3-+-+-+-+-+-3-+-+-3-+-+-+-+-+-+-2-2-+-2-+-+
-|╱| | | | | | | | | | | | | | | | | | | | | | | | | | | | |╱|\| | | | | | | | | |
-+-1-2-2-+-2-+-2-+-+-1-2-+-+-2-2-+-+-+-3-+-1-+-2-1-+-2-3-3-+-1-+-+-+-3-+-+-2-+-2-+
-| | | | | | | |╱|\| | | | | | | | |╱| | | | | | |╱| | | | |\| | | | | | | | | | |
-+-1-+-+-2-+-2-+-1-+-3-2-2-2-+-2-2-+-1-1-+-2-2-1-+-1-+-+-+-2-+-2-3-+-+-+-3-+-2-1-+
-|\|╱| | | | |╱| | | | | | | | | | | | |╱| | | | | | | | | | | | |╱|\| | | | | | |
-+-+-+-2-1-+-+-1-1-+-+-+-+-2-3-3-+-1-3-+-+-+-+-+-2-2-3-+-+-+-+-+-+-1-+-2-+-1-+-3-+
-| | | | | |\|\| |╱| |\| | | | | |\| | | | | | | | | | | | | | | | | | | | | | | |
-+-1-2-+-2-1-+-+-+-1-1-+-+-3-+-+-2-+-1-+-2-3-2-+-1-+-1-+-+-+-2-1-3-2-1-2-+-+-2-1-+
-| | | | | | | | |\| | | | | | | |╱| | | | | |╱| | | | | | | | | | | | | | | | | |
-+-2-+-2-+-1-3-+-+-+-3-+-3-+-3-3-+-+-3-3-1-1-+-1-2-2-1-+-3-+-+-+-2-2-2-2-+-+-+-2-+
-| | | | | | | | | | | | | | | | | | | | | |╱| | | | | | | | | | | | | | | | | | |
-+-2-+-2-1-3-+-2-2-3-+-2-+-2-+-+-3-1-+-2-+-+-2-2-+-+-2-3-+-3-+-+-1-1-+-2-+-2-2-2-1
-| | | | | | | | | | | | | | | |\| |╱| | | | | | | | | | | | | |\| | | | | | | | |
-+-+-3-1-+-+-3-3-+-+-1-3-2-+-3-+-+-+-+-+-1-+-+-3-+-+-2-2-+-3-3-+-+-3-1-2-2-+-2-+-+
-| | | | | | | | | | | | | | | | | | | | | | | | |╱| | | | | | |\| | | | | | | |╱|
-+-3-+-+-+-2-2-+-+-+-2-+-+-+-+-+-+-1-+-+-2-+-1-+-+-1-3-1-2-+-+-3-+-2-+-+-+-3-+-+-1
-| |╱| |\| | | | | | | | | | | | | | | | | | | | | | | | | | | | | |╱| | | | |╱| |
-+-+-1-1-+-+-+-+-3-+-+-1-3-+-+-3-2-+-+-3-+-+-+-+-2-2-+-+-+-2-+-+-+-+-1-2-3-+-+-2-1
-| |\| | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |\| | | | | | |
-+-2-+-1-+-+-+-+-+-3-2-+-1-3-2-2-3-+-+-1-2-+-+-3-+-+-+-+-+-3-3-+-+-+-+-1-3-2-3-2-+
-| | | | | | | | | | | | | | | | | | | | | | | | | | | |╱| | | | |\| | | | | | | |
-+-1-1-3-+-2-2-+-+-3-+-+-+-1-+-2-+-2-+-1-3-+-1-+-+-2-2-+-1-+-+-1-2-+-+-1-+-+-+-+-+
-| | | |╱| | | | | | |\| | | | | | | |\| | | | |╱| | | | | |\| | |╱|╱| | | | | | |
-1-3-+-+-2-3-+-2-+-+-1-+-1-2-3-1-2-+-1-+-+-3-2-+-1-2-1-+-2-1-+-2-+-+-+-3-+-2-+-3-+
-| | | | | | |\| | | | | | | | | | | |╱| | | | |\| | |╱| | |╱|\|╱| | | | | | |\| |
-+-2-3-1-+-+-+-+-2-3-3-+-3-2-+-+-2-+-+-1-+-1-+-+-+-+-+-1-3-+-1-+-+-3-3-1-1-3-1-+-+
-|\| | |╱| |╱|\| | | | | | | |\| | | | | |\| | | | | | | | |\| | | | | | | | |╱| |
-+-+-1-+-+-+-1-+-+-+-+-+-3-+-1-+-+-+-3-3-+-+-3-2-+-+-+-3-1-2-+-3-2-+-+-+-3-+-+-3-+
-| |\|╱|╱|\| | | | | | | | |\|╱|\| | | | | | | | | | | | | | | | | | | | | | | | |
-+-+-+-+-1-+-1-3-2-1-3-+-2-+-+-1-+-+-+-+-3-2-2-+-1-2-+-+-2-2-+-2-+-3-1-2-+-+-+-1-+
-| | | |\| |\| | | | | | | |╱| | | | | | | | | |\| | | |\| | | |╱| | | | | | |\| |
-+-3-+-2-+-2-+-+-1-+-+-2-2-+-1-1-+-+-2-+-+-2-3-1-+-+-+-1-+-2-3-+-+-3-2-+-+-3-1-+-+
-| | | | | | | |\| |╱| | | | | |╱|╱|\| | | | | | | | | | | | | |╱| | | | | | | |╱|
-1-2-+-+-2-2-2-1-+-+-2-1-+-+-2-+-+-1-+-2-1-3-1-+-+-2-3-+-+-+-1-+-1-+-+-3-3-+-+-+-1
-| | | | | | | |╱| | | |╱| | | | | |╱| | | | | |╱|\| | | | | | |\|╱| | | | | |╱| |
-+-3-+-+-2-+-1-+-+-+-1-+-+-+-3-3-2-+-+-+-+-1-+-+-1-+-1-3-+-+-+-+-+-+-+-1-1-+-+-1-1
-| | |╱| | | | |\| |\|╱|╱| | | | | | | | | |╱|\| | | | | | | |\| | | | | |╱|╱| | |
-1-1-+-1-2-+-1-2-+-3-+-+-1-3-2-+-+-+-+-2-3-+-1-+-1-2-1-+-+-2-1-+-3-2-1-1-+-+-2-2-+
-| |╱| | | | | | | | | | | | | | | |╱| | | | | |\| | | | | | | | | | | | | | | |╱|
-1-+-+-2-+-2-3-1-2-2-3-+-1-+-+-1-3-+-2-1-2-2-1-+-+-+-2-2-+-+-1-3-+-+-+-2-+-3-+-+-0
-|╱| | |╱| | | | | | | |\|╱| | | | |\| | | | |╱| | |\| | | |\| | | | |\|╱| | | |\|
-+-1-1-+-+-1-+-1-+-+-+-+-+-1-+-+-+-1-+-+-+-+-+-1-+-1-+-1-1-+-+-+-+-1-1-+-1-1-1-+-+
-"""
