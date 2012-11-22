@@ -53,6 +53,8 @@ def merge_params (self, d):
 class Puzzle:
   puzzle_name = 'none'
 
+  checking = set()
+
   def __init__ (self, game_id):
     self.moves = []
 
@@ -148,10 +150,37 @@ class Puzzle:
       if not args.n:
         os.system(' '.join((self.puzzle_name, filename)))
 
+class Node:
+  def __init__ (self, puzzle, x, y):
+    self.puzzle = puzzle
+    self.x = x
+    self.y = y
+
+  @property
+  def solved (self):
+    return False
+
+  def solve (self):
+    self.puzzle.checking = set()
+    to_solve = collections.OrderedDict()
+    to_solve[self] = None
+
+    while to_solve:
+      node, _ = to_solve.popitem()
+      self.puzzle.checking.add(node)
+      affected = node._solve()
+      if affected:
+        to_solve.update((n, None) for n in affected)
+
+    self.puzzle.checking = set()
+    return self.solved
+
+########################################################################
+# start Slant
+########################################################################
+
 class SlantPuzzle (Puzzle):
   puzzle_name = 'slant'
-
-  checking = set()
 
   def __init__ (self, game_id):
     super().__init__(game_id)
@@ -272,34 +301,6 @@ class SlantPuzzle (Puzzle):
   def _format_moves (self):
     return ['{}{},{}'.format('/' if e.state == '╱' else '\\', e.x, e.y)
             for e in self.moves]
-
-
-class Node:
-  def __init__ (self, puzzle, x, y):
-    self.puzzle = puzzle
-    self.x = x
-    self.y = y
-
-  @property
-  def solved (self):
-    return False
-
-  def solve (self):
-    self.puzzle.checking = set()
-    to_solve = collections.OrderedDict()
-    to_solve[self] = None
-
-    while to_solve:
-      node, _ = to_solve.popitem()
-      self.puzzle.checking.add(node)
-      #self.puzzle.print(wait=0.05)
-      affected = node._solve()
-      if affected:
-        to_solve.update((n, None) for n in affected)
-
-    self.puzzle.checking = set()
-    return self.solved
-
 
 
 class EdgeNode (Node):
@@ -611,11 +612,14 @@ class VertexNode (Node):
       return self.puzzle.vertex[y][x]
     raise IndexError()
 
+########################################################################
+# end Slant
+########################################################################
 
-ap = argparse.ArgumentParser(description='Solve Slant Puzzles')
+ap = argparse.ArgumentParser(description='Solve Puzzles')
 ap.add_argument('game', help='Game ID or saved game filename')
 ap.add_argument('-q', action='store_true', help='Suppress output')
-ap.add_argument('-n', action='store_true', help='Do not open Slant')
+ap.add_argument('-n', action='store_true', help='Do not open puzzle program')
 ap.add_argument('-f', action='store_true', help='Fast drawing')
 args = ap.parse_args()
 
