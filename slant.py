@@ -1,189 +1,13 @@
 #!/usr/bin/python3
 
-import sys, pprint, time, collections, os, re, argparse
-
-_base = ord('a') - 1
-expand = lambda c: ord(c) - _base
-waittime = 0.25
-#waittime = 1
-
-def save_field (s):
-  s = str(s)
-  return '{}:{}'.format(len(s), s)
-
-def invert (state):
-  if state:
-    return '╱' if state == '╲' else '╲'
-  return None
-
-def connect_edge (n):
-  return '╲' if n%3==0 else '╱'
-
-def anti_edge (n):
-  return invert(connect_edge(n))
-
-def hl_current (txt):
-  return '\033[7;2;32m' + txt + '\033[0m'
-
-def hl_changed (txt):
-  return '\033[7;1;30;43m' + txt + '\033[0m'
-
-def hl_error (txt):
-  return '\033[7;1;30;41m' + txt + '\033[0m'
-
-def listify (l):
-  if type(l) is not list:
-    return [l]
-  return l
-
-def which_edges (dx, dy):
-  e1 = (dx>0) + (dy>0)*2
-  e2 = e1 + 1 + abs(dx)
-  return e1, e2
-
-params_re = r'(?P<width>\d+)x(?P<height>\d+)(?P<type>t\d+)?(?P<difficulty>d.)?'
-desc_re = r'(?P<game>\w+)'
-game_id_re = ':'.join((params_re, desc_re))
-def merge_params (self, d):
-  for param, value in d:
-    if value is not None and value.isdecimal():
-      value = int(value)
-    setattr(self, param, value)
-
-class Puzzle:
-  puzzle_name = 'none'
-
-  checking = set()
-
-  def __init__ (self, game_id):
-    self.moves = []
-
-    m = re.match(game_id_re, game_id)
-    if m:
-      merge_params(self, m.groupdict().items())
-    else:
-      with open(game_id, 'r') as i:
-        for line in i:
-          if not line.strip():
-            continue
-          param, _, val = (p.strip() for p in line.split(':', 2))
-          if param == 'PARAMS':
-            m = re.match(params_re, val)
-            if m:
-              merge_params(self, m.groupdict().items())
-            size = val
-          elif param == 'DESC':
-            self.game = val
-          elif param == 'MOVE':
-            moves.append(val)
-
-    self.unsolved_nodes = collections.deque()
-
-  @property
-  def _draw_height (self):
-    return 0
-
-  def draw (self):
-    pass
-
-  def __str__ (self):
-    return self.draw()
-
-  def print (self, *vargs, **kwargs):
-    if args.q:
-      return
-    if vargs or kwargs:
-      # Reposition to overwrite
-      print('\033[{}F'.format(self._draw_height))
-    wait = kwargs.pop('wait', waittime)
-    print('\033[?25l' + self.draw(*vargs, **kwargs) + '\033[?25h')
-    if not args.f:
-      time.sleep(wait)
-
-  def _solve_moves (self):
-    return []
-
-  def solve (self):
-    j = 0
-    while self.unsolved_nodes:
-      try:
-        node = self.unsolved_nodes.popleft()
-        if node.solved:
-          j = 0
-        else:
-          if not node.solve():
-            self.unsolved_nodes.append(node)
-            j += 1
-            if j == len(self.unsolved_nodes)*2:
-              break
-          else:
-            j = 0
-      except KeyboardInterrupt:
-        break
-      except AssertionError as e:
-        break
-
-    self.print(wait=0)
-
-    filename = self.puzzle_name + '_soln.game'
-    moves = self._format_moves()
-    params = save_field('{}x{}{}{}'.format(self.width, self.height, self.type,
-                                           self.difficulty))
-    states = save_field(len(moves) + 1)
-    with open(filename, 'w') as o:
-      print("SAVEFILE:41:Simon Tatham's Portable Puzzle Collection\n"
-            'VERSION :1:1\n'
-            'GAME    :' + save_field(self.puzzle_name.capitalize()) + '\n'
-            'PARAMS  :' + params + '\n'
-            'CPARAMS :' + params + '\n'
-            'DESC    :' + save_field(self.game) + '\n'
-            'NSTATES :' + states + '\n'
-            'STATEPOS:' + ('1:1' if args.q else states),
-            file=o)
-      for m in moves:
-        print('MOVE    :' + save_field(m), file=o)
-
-    if self.unsolved_nodes:
-      print('Failure...')
-    else:
-      print('Success!')
-      if not args.n:
-        os.system(' '.join((self.puzzle_name, filename)))
-
-class Node:
-  def __init__ (self, puzzle, x, y):
-    self.puzzle = puzzle
-    self.x = x
-    self.y = y
-
-  @property
-  def solved (self):
-    return False
-
-  def solve (self):
-    self.puzzle.checking = set()
-    to_solve = collections.OrderedDict()
-    to_solve[self] = None
-
-    while to_solve:
-      node, _ = to_solve.popitem()
-      self.puzzle.checking.add(node)
-      affected = node._solve()
-      if affected:
-        to_solve.update((n, None) for n in affected)
-
-    self.puzzle.checking = set()
-    return self.solved
-
-########################################################################
-# start Slant
-########################################################################
+from puzzle import *
 
 class SlantPuzzle (Puzzle):
   puzzle_name = 'slant'
+  ex_game = '5x5dh'
 
-  def __init__ (self, game_id):
-    super().__init__(game_id)
+  def __init__ (self, game_id, quiet=False, opengui=True, fast=False):
+    super().__init__(game_id, quiet, opengui, fast)
     self.sl = EdgeNode(self, None, None, '╱')
     self.bs = EdgeNode(self, None, None, '╲')
 
@@ -242,21 +66,40 @@ class SlantPuzzle (Puzzle):
         if not self.edge[y][x].solved:
           self.unsolved_nodes.append(self.edge[y][x])
 
-  @property
-  def game_id (self):
-    return '{}x{}:{}'.format(self.width, self.height, self.game)
+  def _pre_configure (self):
+    self.sl = EdgeNode(self, None, None, '╱')
+    self.bs = EdgeNode(self, None, None, '╲')
 
-  def move (self, edge):
-    self.moves.append(edge)
+    self.edge = [[EdgeNode(self, x, y) for x in range(0, self.width)]
+                 for y in range(0, self.height)]
+    self.vertex = [[VertexNode(self, x, y) for x in range(0, self.width+1)]
+                   for y in range(0, self.height+1)]
 
-  def undo (self, mark=None):
-    if mark is None:
-      mark = len(self.moves) - 1
-    while len(self.moves) > mark:
-      self.moves.pop().state = None
+    # Wire them up
+    for y in range(0, self.height+1):
+      for x in range(0, self.width+1):
+        edges = []
+        verticies = []
+        for dy in (-1, 0):
+          for dx in (-1, 0):
+            if (y+dy < 0 or y+dy == self.height or x+dx < 0 or
+                x+dx == self.width):
+              edges.append(self.bs if dx+dy == -1 else self.sl)
+            else:
+              edges.append(self.edge[y+dy][x+dx])
 
-  def undo_mark (self):
-    return len(self.moves)
+            if y < self.height and x < self.width:
+              verticies.append(self.vertex[y-dy][x-dx])
+
+        self.vertex[y][x].edge = edges
+        if verticies:
+          self.edge[y][x].vertex = verticies
+
+  def _configure (x, y, val):
+    self.vertex[pos_y][pos_x]._degree = val
+
+  def _undo (self, edge):
+    edge.state = None
 
   def draw (self, changes=[], errors=[]):
     changes = listify(changes)
@@ -398,18 +241,15 @@ class EdgeNode (Node):
         return self.vertex[1]
     return None
 
-class VertexNode (Node):
+class VertexNode (DegreeNode):
   """
   Edge order is: (-1,-1) (0,-1) (-1,0) (0,0)
   0│1
   ─┼─
   2│3
   """
+  cardinality = 4
   edge = None
-
-  def __init__ (self, puzzle, x, y, degree=None):
-    super().__init__(puzzle, x, y)
-    self._degree = degree
 
   chars = ('┌┬┐'
            '├┼┤'
@@ -421,9 +261,6 @@ class VertexNode (Node):
     return self.chars[((self.y != 0) + (self.y == self.puzzle.height))*3 +
                       (self.x != 0) + (self.x == self.puzzle.width)]
 
-  def __repr__ (self):
-    return '<{} x={}, y={}, _degree={}>'.format(self.__class__.__name__, self.x,
-                                              self.y, self._degree)
   @property
   def solved_edges (self):
     return (((n%3==0) == (e.state == '╲'), e) for n,e in enumerate(self.edge)
@@ -438,27 +275,12 @@ class VertexNode (Node):
     return (e for connected, e in self.solved_edges if connected)
 
   @property
-  def _antidegree (self):
-    return 4 - self._degree if self.degree is not None else None
-
-  @property
   def degree (self):
     return sum(1 for _ in self.connected_edges)
 
   @property
   def antidegree (self):
     return sum(1 for _ in self.solved_edges) - self.degree
-
-  @property
-  def solved (self):
-    if self._degree is None:
-      return True
-
-    if self.degree > self._degree or self.antidegree > self._antidegree:
-      self.puzzle.print(errors=self, wait=waittime*1.5)
-    assert self.degree <= self._degree and self.antidegree <= self._antidegree
-    return self.degree + self.antidegree == 4
-
 
   def _is_parallel (self, dx, dy, degree=None):
     e1, e2 = (self.edge[e] for e in which_edges(dx, dy))
@@ -612,23 +434,5 @@ class VertexNode (Node):
       return self.puzzle.vertex[y][x]
     raise IndexError()
 
-########################################################################
-# end Slant
-########################################################################
-
-ap = argparse.ArgumentParser(description='Solve Puzzles')
-ap.add_argument('game', help='Game ID or saved game filename')
-ap.add_argument('-q', action='store_true', help='Suppress output')
-ap.add_argument('-n', action='store_true', help='Do not open puzzle program')
-ap.add_argument('-f', action='store_true', help='Fast drawing')
-args = ap.parse_args()
-
-
-if args.game:
-  p = SlantPuzzle(args.game)
-  print(p.game_id)
-  p.print()
-  p.solve()
-#else:
-  #print('Usage:', sys.argv[0], '[game_id]')
-
+if __name__ == '__main__':
+  main(SlantPuzzle)
