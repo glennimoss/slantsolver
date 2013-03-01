@@ -88,7 +88,7 @@ class Puzzle:
       if c.isalpha():
         pos_x += expand(c)
       else:
-        self._configure(x, y, int(c))
+        self._configure(pos_x, pos_y, int(c))
         pos_x += 1
 
       while pos_x > self.width:
@@ -116,7 +116,7 @@ class Puzzle:
   def _pre_configure (self):
     pass
 
-  def _configure (x, y, val):
+  def _configure (self, x, y, val):
     pass
 
   @property

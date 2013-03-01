@@ -6,66 +6,6 @@ class SlantPuzzle (Puzzle):
   puzzle_name = 'slant'
   ex_game = '5x5dh'
 
-  def __init__ (self, game_id, quiet=False, opengui=True, fast=False):
-    super().__init__(game_id, quiet, opengui, fast)
-    self.sl = EdgeNode(self, None, None, '╱')
-    self.bs = EdgeNode(self, None, None, '╲')
-
-    self.edge = [[EdgeNode(self, x, y) for x in range(0, self.width)]
-                 for y in range(0, self.height)]
-    self.vertex = [[VertexNode(self, x, y) for x in range(0, self.width+1)]
-                   for y in range(0, self.height+1)]
-
-    # Wire them up
-    for y in range(0, self.height+1):
-      for x in range(0, self.width+1):
-        edges = []
-        verticies = []
-        for dy in (-1, 0):
-          for dx in (-1, 0):
-            if (y+dy < 0 or y+dy == self.height or x+dx < 0 or
-                x+dx == self.width):
-              edges.append(self.bs if dx+dy == -1 else self.sl)
-            else:
-              edges.append(self.edge[y+dy][x+dx])
-
-            if y < self.height and x < self.width:
-              verticies.append(self.vertex[y-dy][x-dx])
-
-        self.vertex[y][x].edge = edges
-        if verticies:
-          self.edge[y][x].vertex = verticies
-
-    pos_x = pos_y = 0
-    for c in self.game:
-      if c.isalpha():
-        pos_x += expand(c)
-      else:
-        node = self.vertex[pos_y][pos_x]
-        node._degree = int(c)
-        pos_x += 1
-
-      while pos_x > self.width:
-        pos_y += 1
-        pos_x -= self.width + 1
-
-    moves = self.moves
-    self.moves = []
-    for move in moves:
-      s = '╱' if move[0] == '/' else '╲'
-      x, y = (int(v) for v in move[1:].split(','))
-      self.edge[y][x].state = s
-
-    for y in range(0, self.height+1):
-      for x in range(0, self.width+1):
-        if not self.vertex[y][x].solved:
-          self.unsolved_nodes.append(self.vertex[y][x])
-
-    for y in range(0, self.height):
-      for x in range(0, self.width):
-        if not self.edge[y][x].solved:
-          self.unsolved_nodes.append(self.edge[y][x])
-
   def _pre_configure (self):
     self.sl = EdgeNode(self, None, None, '╱')
     self.bs = EdgeNode(self, None, None, '╲')
@@ -95,8 +35,8 @@ class SlantPuzzle (Puzzle):
         if verticies:
           self.edge[y][x].vertex = verticies
 
-  def _configure (x, y, val):
-    self.vertex[pos_y][pos_x]._degree = val
+  def _configure (self, x, y, val):
+    self.vertex[y][x]._degree = val
 
   def _undo (self, edge):
     edge.state = None
