@@ -164,7 +164,7 @@ class Puzzle:
         if node.solved:
           j = 0
         else:
-          if not node.solve():
+          if not node.solve(True):
             self.unsolved_nodes.append(node)
             j += 1
             if j == len(self.unsolved_nodes)*2:
@@ -208,12 +208,14 @@ class Node:
     self.puzzle = puzzle
     self.x = x
     self.y = y
+    self._solve_chain_initiator = False
 
   @property
   def solved (self):
     return False
 
-  def solve (self):
+  def solve (self, toplevel=False):
+    self._solve_chain_initiator = toplevel
     self.puzzle.checking = set()
     to_solve = collections.OrderedDict()
     to_solve[self] = None

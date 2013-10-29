@@ -258,7 +258,7 @@ class VertexNode (DegreeNode):
 
   @property
   def antidegree (self):
-    return sum(1 for _ in self.solved_edges) - self.degree
+    return sum(1 for connected, _ in self.solved_edges if not connected)
 
   def _is_parallel (self, dx, dy, degree=None):
     e1, e2 = (self.edge[e] for e in which_edges(dx, dy))
@@ -295,20 +295,25 @@ class VertexNode (DegreeNode):
 
     return changed
 
+  def _satisfy (self):
+    changes = []
+    if self.degree == self._degree:
+      # set all unset nodes to the antistate
+      for n, e in self.unsolved_edges:
+        e.state = anti_edge(n)
+        changes.append(e)
+    elif self.antidegree == self._antidegree:
+      # set all unset nodes to the connected state
+      for n, e in self.unsolved_edges:
+        e.state = connect_edge(n)
+        changes.append(e)
+    return changes
+
   def _solve (self):
     if not self.solved:
-      changes = []
-      if self.degree == self._degree:
-        # set all unset nodes to the antistate
-        for n, e in self.unsolved_edges:
-          e.state = anti_edge(n)
-          changes.append(e)
-      elif self.antidegree == self._antidegree:
-        # set all unset nodes to the connected state
-        for n, e in self.unsolved_edges:
-          e.state = connect_edge(n)
-          changes.append(e)
-      else:
+      changes = self._satisfy()
+
+      if not changes:
         for dy in (-1,0,1):
           for dx in (-1,0,1):
             if ((dx == dy == 0) or
@@ -332,7 +337,6 @@ class VertexNode (DegreeNode):
                     changes.append(edge)
               elif self._is_parallel(dx*-1, dy*-1):
                 changes.extend(ov._parallel(dx, dy))
-                continue
               else:
                 e1, e2 = (self.edge[e] for e in which_edges(dx*-1, dy*-1))
 
@@ -383,6 +387,47 @@ class VertexNode (DegreeNode):
                 dy *= -1
                 changes.extend(
                   self.puzzle.vertex[self.y+dy][self.x+dx]._parallel(dx, dy))
+
+        if (self._solve_chain_initiator and not changes and
+            0 < self.x < self.puzzle.width and 0 < self.y < self.puzzle.height):
+          # Consider only the diagonals
+          for dy in (-1, 1):
+            for dx in (-1, 1):
+              ov = self.adjacent_vertex(dx, dy)
+              e, _ = which_edges(dx, dy)
+              edge = self.edge[e]
+
+              if (edge.solved or ov._degree is None or
+                  not (0 < ov.x < self.puzzle.width and
+                       0 < ov.y < self.puzzle.height) or
+                  not (self._degree - self.degree == 1 and
+                       ov._degree - ov.degree == 1)
+                 ):
+                continue
+
+              expanded_strategy = edge._last_moves == self.puzzle.moves
+              edge._last_moves = list(self.puzzle.moves)
+
+              if not expanded_strategy:
+                continue
+
+              self.puzzle.checking.add(ov)
+              try:
+                mark = self.puzzle.undo_mark();
+                edge.state = connect_edge(e)
+
+                try_changes = self._satisfy()
+                try_changes.extend(ov._satisfy())
+                self.puzzle.print(changes=try_changes)
+
+                self.puzzle.undo(mark)
+              except AssertionError:
+                s = invert(edge.state)
+                self.puzzle.undo(mark)
+                edge._state = s
+                self.puzzle.move(edge)
+                changes.append(edge)
+
 
 
       if changes:
