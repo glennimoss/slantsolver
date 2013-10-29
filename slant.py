@@ -2,13 +2,30 @@
 
 from puzzle import *
 
+def invert (state):
+  if state:
+    return c_slash if state == c_bslash else c_bslash
+  return None
+
+def connect_edge (n):
+  return c_bslash if n%3==0 else c_slash
+
+def anti_edge (n):
+  return invert(connect_edge(n))
+
+def which_edges (dx, dy):
+  e1 = (dx>0) + (dy>0)*2
+  e2 = e1 + 1 + abs(dx)
+  return e1, e2
+
+
 class SlantPuzzle (Puzzle):
   puzzle_name = 'slant'
   ex_game = '5x5dh'
 
   def _pre_configure (self):
-    self.sl = EdgeNode(self, None, None, '╱')
-    self.bs = EdgeNode(self, None, None, '╲')
+    self.sl = EdgeNode(self, None, None, c_slash)
+    self.bs = EdgeNode(self, None, None, c_bslash)
 
     self.edge = [[EdgeNode(self, x, y) for x in range(0, self.width)]
                  for y in range(0, self.height)]
@@ -61,7 +78,7 @@ class SlantPuzzle (Puzzle):
           if v in changes:
             txt = hl_changed(txt)
           row.append(txt)
-        out.append('─'.join(row))
+        out.append(c_horiz.join(row))
       else:
         row = []
         for x in range(0, self.width):
@@ -74,7 +91,7 @@ class SlantPuzzle (Puzzle):
           if e in changes:
             txt = hl_changed(txt)
           row.append(txt)
-        out.append('│' + '│'.join(row) + '│')
+        out.append(c_vert + c_vert.join(row) + c_vert)
     return '\n'.join(out)
 
   @property
@@ -82,7 +99,7 @@ class SlantPuzzle (Puzzle):
     return self.height*2 + 2
 
   def _format_moves (self):
-    return ['{}{},{}'.format('/' if e.state == '╱' else '\\', e.x, e.y)
+    return ['{}{},{}'.format('/' if e.state == c_slash else '\\', e.x, e.y)
             for e in self.moves]
 
 
@@ -102,7 +119,7 @@ class EdgeNode (Node):
     self._state = state
 
   def __str__ (self):
-    return str(self.state) if self.state else ' '
+    return str(self.state) if self.state else '\u3000'
 
   def __repr__ (self):
     return '<{} x={}, y={}, state={}>'.format(self.__class__.__name__, self.x,
@@ -129,7 +146,7 @@ class EdgeNode (Node):
     return self.state is not None
 
   def _cycle_check (self):
-    if self._state == '╱':
+    if self._state == c_slash:
       vert_a = self.vertex[1]
       vert_b = self.vertex[2]
     else:
@@ -149,7 +166,7 @@ class EdgeNode (Node):
       expanded_strategy = self._last_moves == self.puzzle.moves
       self._last_moves = list(self.puzzle.moves)
       try:
-        for s in ('╱', '╲'):
+        for s in (c_slash, c_bslash):
           mark = self.puzzle.undo_mark();
           self.state = s
           if expanded_strategy:
@@ -169,7 +186,7 @@ class EdgeNode (Node):
     if not self.solved:
       return None
 
-    if self.state == '╲':
+    if self.state == c_bslash:
       if vertex is self.vertex[0]:
         return self.vertex[3]
       elif vertex is self.vertex[3]:
@@ -187,24 +204,45 @@ class VertexNode (DegreeNode):
   0│1
   ─┼─
   2│3
+
+  Print characters are represented by 8 bits + 0x3400:
+  0 1 2
+  7㓿 3
+  6 5 4
   """
   cardinality = 4
   edge = None
 
-  chars = ('┌┬┐'
-           '├┼┤'
-           '└┴┘')
+  chars = (0x28, 0xa8, 0xa0,
+           0x2a, 0xaa, 0xa2,
+           0x0a, 0x8a, 0x82)
+  # These are necessary to map the clockwise representation in the character set
+  # to left-to-right, top-to-bottom edge ordering.
+  offset = (1, 2**2, 2**6, 2**4)
+  offset_nums = (1, 2, 8, 4)
   def __str__ (self):
     if self._degree is not None:
-      return str(self._degree)
+      offset = 0
+      for n, connected, _ in self.edges:
+        if connected:
+          offset += self.offset_nums[n] * 0x10
+      return chr(0x3500 + self._degree + offset)
     # Yay math :D
-    return self.chars[((self.y != 0) + (self.y == self.puzzle.height))*3 +
+    base = self.chars[((self.y != 0) + (self.y == self.puzzle.height))*3 +
                       (self.x != 0) + (self.x == self.puzzle.width)]
+    for n, connected, _ in self.edges:
+      if connected:
+        base += self.offset[n]
+    return chr(0x3400 + base)
 
   @property
+  def edges (self):
+    return ((n, (n%3==0) == (e.state == c_bslash) and e.state, e)
+            for n,e in enumerate(self.edge))
+  @property
   def solved_edges (self):
-    return (((n%3==0) == (e.state == '╲'), e) for n,e in enumerate(self.edge)
-            if e.solved)
+    return (((n%3==0) == (e.state == c_bslash), e)
+            for n,e in enumerate(self.edge) if e.solved)
 
   @property
   def unsolved_edges (self):

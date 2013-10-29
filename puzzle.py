@@ -5,20 +5,15 @@ expand = lambda c: ord(c) - _base
 waittime = 0.25
 #waittime = 1
 
+c_slash = '\u3444'
+c_bslash = '\u3411'
+c_vert = '\u3422'
+c_horiz = '\u3488'
+
+
 def save_field (s):
   s = str(s)
   return '{}:{}'.format(len(s), s)
-
-def invert (state):
-  if state:
-    return '╱' if state == '╲' else '╲'
-  return None
-
-def connect_edge (n):
-  return '╲' if n%3==0 else '╱'
-
-def anti_edge (n):
-  return invert(connect_edge(n))
 
 def hl_current (txt):
   return '\033[7;2;32m' + txt + '\033[0m'
@@ -33,11 +28,6 @@ def listify (l):
   if type(l) is not list:
     return [l]
   return l
-
-def which_edges (dx, dy):
-  e1 = (dx>0) + (dy>0)*2
-  e2 = e1 + 1 + abs(dx)
-  return e1, e2
 
 params_re = r'(?P<width>\d+)x(?P<height>\d+)(?P<type>t\d+)?(?P<difficulty>d.)?'
 desc_re = r'(?P<game>\w+)'
@@ -95,10 +85,11 @@ class Puzzle:
         pos_y += 1
         pos_x -= self.width + 1
 
+    self.total_moves = 0
     moves = self.moves
     self.moves = []
     for move in moves:
-      s = '╱' if move[0] == '/' else '╲'
+      s = c_slash if move[0] == '/' else c_bslash
       x, y = (int(v) for v in move[1:].split(','))
       self.edge[y][x].state = s
 
@@ -150,6 +141,7 @@ class Puzzle:
       time.sleep(wait)
 
   def move (self, move):
+    self.total_moves += 1
     self.moves.append(move)
 
   def undo (self, mark=None):
@@ -203,12 +195,13 @@ class Puzzle:
       for m in moves:
         print('MOVE    :' + save_field(m), file=o)
 
+    print(self.total_moves, 'moves considered.')
     if self.unsolved_nodes:
       print('Failure...')
     else:
       print('Success!')
-      if self._opengui:
-        os.system(' '.join((self.puzzle_name, filename)))
+    if self._opengui:
+      os.system(' '.join((self.puzzle_name, filename)))
 
 class Node:
   def __init__ (self, puzzle, x, y):
