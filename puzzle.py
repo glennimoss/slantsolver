@@ -19,10 +19,10 @@ def hl_current (txt):
   return '\033[7;2;32m' + txt + '\033[0m'
 
 def hl_changed (txt):
-  return '\033[7;1;30;43m' + txt + '\033[0m'
+  return '\033[35m' + txt + '\033[0m'
 
 def hl_error (txt):
-  return '\033[7;1;30;41m' + txt + '\033[0m'
+  return '\033[31m' + txt + '\033[0m'
 
 def listify (l):
   if type(l) is not list:
