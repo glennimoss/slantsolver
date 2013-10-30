@@ -34,7 +34,7 @@ desc_re = r'(?P<game>\w+)'
 game_id_re = ':'.join((params_re, desc_re))
 def merge_params (self, d):
   for param, value in d:
-    if value is not None and value.isdecimal():
+    if param != 'game' and value is not None and value.isdecimal():
       value = int(value)
     setattr(self, param, value)
 
